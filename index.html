@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Transfer user_posts (with cover images) between SQLite DBs</title>
+  <style>
+    body {
+      font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+      max-width: 1000px;
+      margin: 2rem auto;
+      padding: 1rem;
+      background: #f1f5f9;
+    }
+    .card {
+      background: white;
+      border-radius: 24px;
+      padding: 1.8rem;
+      margin-bottom: 1.5rem;
+      box-shadow: 0 8px 20px rgba(0,0,0,0.08);
+    }
+    h1, h2 { margin-top: 0; color: #0f172a; }
+    pre {
+      background: #0f172a;
+      color: #e2e8f0;
+      padding: 1rem;
+      border-radius: 12px;
+      overflow-x: auto;
+      font-size: 12px;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    button {
+      background: #3b82f6;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 40px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 0.9rem;
+      margin-right: 12px;
+      margin-top: 0.5rem;
+    }
+    button:hover { background: #2563eb; }
+    button:disabled { background: #94a3b8; cursor: not-allowed; }
+    .status {
+      padding: 12px 16px;
+      border-radius: 16px;
+      margin: 1rem 0;
+      font-weight: 500;
+    }
+    .status.info { background: #e0f2fe; color: #0369a1; }
+    .status.success { background: #d1fae5; color: #065f46; }
+    .status.error { background: #fee2e2; color: #991b1b; }
+    .flex { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+    progress { width: 100%; height: 24px; border-radius: 12px; margin: 0.5rem 0; }
+    hr { margin: 1.5rem 0; }
+    code { background: #eef2ff; padding: 2px 6px; border-radius: 8px; }
+    .file-input-group {
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+    .file-input-group label {
+      font-weight: 600;
+      width: 120px;
+    }
+    input[type="file"] {
+      flex: 1;
+      padding: 8px;
+      border: 1px solid #cbd5e1;
+      border-radius: 12px;
+      background: #f8fafc;
+    }
+    .cover-preview {
+      margin-top: 1rem;
+      text-align: center;
+      border: 1px solid #e2e8f0;
+      border-radius: 16px;
+      padding: 1rem;
+      background: #f9fafb;
+    }
+    .cover-preview img {
+      max-width: 300px;
+      max-height: 300px;
+      border-radius: 12px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+  </style>
+</head>
+<body>
+<div class="card">
+  <h1>📦 Transfer <code>user_posts</code> (with cover images)</h1>
+  <p><strong>Owner filter:</strong> <code>abigail4410</code></p>
+
+  <div class="file-input-group">
+    <label>📂 Source DB:</label>
+    <input type="file" id="sourceFileInput" accept=".db,.sqlite">
+  </div>
+  <div class="file-input-group">
+    <label>🎯 Target DB:</label>
+    <input type="file" id="targetFileInput" accept=".db,.sqlite">
+  </div>
+
+  <div class="flex">
+    <button id="transferBtn" disabled>🔄 Transfer (source → target)</button>
+    <button id="downloadBtn" disabled>💾 Download target as tikPosts.db</button>
+    <button id="showCoverBtn" disabled>🖼️ Show sample cover image</button>
+  </div>
+  <div id="status" class="status info">Select source and target database files, then click Transfer.</div>
+  <progress id="progressBar" value="0" max="100" style="display: none;"></progress>
+  <div id="coverPreview" class="cover-preview" style="display: none;"></div>
+  <h3>📋 Log</h3>
+  <pre id="output">No action yet.</pre>
+</div>
+
+<script src="js/jafersql.js"></script>
+<script>
+  (function() {
+    const sourceFileInput = document.getElementById('sourceFileInput');
+    const targetFileInput = document.getElementById('targetFileInput');
+    const transferBtn = document.getElementById('transferBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const showCoverBtn = document.getElementById('showCoverBtn');
+    const statusDiv = document.getElementById('status');
+    const outputPre = document.getElementById('output');
+    const progressBar = document.getElementById('progressBar');
+    const coverPreviewDiv = document.getElementById('coverPreview');
+
+    const OWNER = 'abigail4410';
+
+    let targetDbInstance = null;      // holds opened target DB (after transfer)
+    let currentCoverBlobUrl = null;
+    let sourceFileBuffer = null;
+    let targetFileBuffer = null;
+
+    // Enable transfer only when both files are selected
+    function checkFiles() {
+      const sourceOk = sourceFileInput.files.length > 0;
+      const targetOk = targetFileInput.files.length > 0;
+      transferBtn.disabled = !(sourceOk && targetOk);
+    }
+
+    sourceFileInput.addEventListener('change', checkFiles);
+    targetFileInput.addEventListener('change', checkFiles);
+
+    function setStatus(message, type = 'info') {
+      statusDiv.textContent = message;
+      statusDiv.className = `status ${type}`;
+    }
+
+    function appendLog(text, isError = false) {
+      const timestamp = new Date().toLocaleTimeString();
+      const prefix = isError ? '❌' : '✓';
+      outputPre.textContent += `[${timestamp}] ${prefix} ${text}\n`;
+      outputPre.scrollTop = outputPre.scrollHeight;
+    }
+
+    function clearLog() {
+      outputPre.textContent = '';
+    }
+
+    function clearCoverPreview() {
+      if (currentCoverBlobUrl) {
+        URL.revokeObjectURL(currentCoverBlobUrl);
+        currentCoverBlobUrl = null;
+      }
+      coverPreviewDiv.style.display = 'none';
+      coverPreviewDiv.innerHTML = '';
+    }
+
+    async function readFileAsBuffer(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsArrayBuffer(file);
+      });
+    }
+
+    async function openDatabaseFromBuffer(buffer) {
+      return await JaferSQL.jaferInit(new Uint8Array(buffer));
+    }
+
+    async function transferPosts() {
+      if (!sourceFileInput.files[0] || !targetFileInput.files[0]) {
+        alert('Please select both source and target database files.');
+        return;
+      }
+
+      transferBtn.disabled = true;
+      downloadBtn.disabled = true;
+      showCoverBtn.disabled = true;
+      clearLog();
+      clearCoverPreview();
+      setStatus('Reading database files...', 'info');
+      progressBar.style.display = 'block';
+      progressBar.value = 0;
+
+      let sourceDb = null;
+      let targetDb = null;
+
+      try {
+        // Read file buffers
+        appendLog(`Reading source: ${sourceFileInput.files[0].name}`);
+        const sourceBuffer = await readFileAsBuffer(sourceFileInput.files[0]);
+        appendLog(`Reading target: ${targetFileInput.files[0].name}`);
+        const targetBuffer = await readFileAsBuffer(targetFileInput.files[0]);
+
+        // Open databases
+        appendLog(`Opening source database...`);
+        sourceDb = await openDatabaseFromBuffer(sourceBuffer);
+        appendLog(`Opening target database...`);
+        targetDb = await openDatabaseFromBuffer(targetBuffer);
+        targetDbInstance = targetDb;
+
+        // Ensure target table schema
+        targetDb.jaferExec(`
+          CREATE TABLE IF NOT EXISTS user_posts (
+            owner_username TEXT NOT NULL,
+            post_date TEXT NOT NULL,
+            likes INTEGER,
+            sound TEXT,
+            cover_image_data BLOB,
+            cover_image_expired INTEGER DEFAULT 0,
+            fetched_at TEXT,
+            PRIMARY KEY (owner_username, post_date)
+          )
+        `);
+        appendLog('Target table verified/created.');
+
+        // Query source rows
+        appendLog(`Fetching rows from source WHERE owner_username = '${OWNER}' ...`);
+        const rows = sourceDb.jaferAll(`
+          SELECT 
+            owner_username, post_date, likes, sound, 
+            cover_image_data, cover_image_expired, fetched_at
+          FROM user_posts
+          WHERE owner_username = ?
+        `, [OWNER]);
+
+        if (!rows.length) {
+          setStatus(`No posts found for owner "${OWNER}" in source.`, 'info');
+          appendLog(`No rows to transfer.`);
+          targetDbInstance = null;
+          return;
+        }
+
+        appendLog(`Found ${rows.length} rows. Upserting into target...`);
+        progressBar.max = rows.length;
+        progressBar.value = 0;
+
+        // Begin transaction
+        targetDb.jaferRun('BEGIN TRANSACTION');
+
+        const stmt = targetDb._db.prepare(`
+          INSERT INTO user_posts (
+            owner_username, post_date, likes, sound,
+            cover_image_data, cover_image_expired, fetched_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(owner_username, post_date) DO UPDATE SET
+            likes = excluded.likes,
+            sound = excluded.sound,
+            cover_image_data = excluded.cover_image_data,
+            cover_image_expired = excluded.cover_image_expired,
+            fetched_at = excluded.fetched_at
+        `);
+
+        for (const row of rows) {
+          stmt.bind([
+            row.owner_username,
+            row.post_date,
+            row.likes,
+            row.sound,
+            row.cover_image_data,
+            row.cover_image_expired,
+            row.fetched_at
+          ]);
+          stmt.step();
+          stmt.reset();
+          progressBar.value++;
+        }
+        stmt.free();
+        targetDb.jaferRun('COMMIT');
+
+        appendLog(`✅ Transfer complete: ${rows.length} rows upserted (cover images preserved).`);
+        setStatus(`Success! ${rows.length} posts copied to target database.`, 'success');
+        progressBar.style.display = 'none';
+
+        // Enable download and show cover buttons
+        downloadBtn.disabled = false;
+        showCoverBtn.disabled = false;
+      } catch (err) {
+        console.error(err);
+        setStatus(`Transfer failed: ${err.message}`, 'error');
+        appendLog(`ERROR: ${err.message}`, true);
+        if (targetDb) {
+          try { targetDb.jaferRun('ROLLBACK'); } catch (e) {}
+          try { targetDb.jaferClose(); } catch (e) {}
+          targetDbInstance = null;
+        }
+        progressBar.style.display = 'none';
+      } finally {
+        if (sourceDb) {
+          try { sourceDb.jaferClose(); appendLog('Source database closed.'); } catch (e) {}
+        }
+        transferBtn.disabled = false;
+      }
+    }
+
+    async function showSampleCover() {
+      if (!targetDbInstance) {
+        alert('No target database available. Please run a successful transfer first.');
+        return;
+      }
+      clearCoverPreview();
+      try {
+        const row = targetDbInstance.jaferGet(`
+          SELECT cover_image_data, post_date, likes
+          FROM user_posts
+          WHERE owner_username = ? AND cover_image_data IS NOT NULL
+          LIMIT 1
+        `, [OWNER]);
+
+        if (!row || !row.cover_image_data) {
+          appendLog('No cover image found in target database for this owner.', true);
+          return;
+        }
+
+        const imageData = row.cover_image_data;
+        const blob = new Blob([imageData], { type: 'image/jpeg' });
+        const blobUrl = URL.createObjectURL(blob);
+        currentCoverBlobUrl = blobUrl;
+
+        const img = document.createElement('img');
+        img.src = blobUrl;
+        img.alt = `Cover from ${row.post_date || 'unknown date'}`;
+        img.style.maxWidth = '100%';
+        img.style.borderRadius = '12px';
+
+        coverPreviewDiv.innerHTML = `
+          <h4>📸 Sample cover image (first post with image)</h4>
+          <div style="margin: 0.5rem 0;"></div>
+          <p><strong>Date:</strong> ${row.post_date || 'unknown'}<br>
+          <strong>Likes:</strong> ${row.likes || 0}</p>
+        `;
+        coverPreviewDiv.appendChild(img);
+        coverPreviewDiv.style.display = 'block';
+
+        appendLog(`Displayed cover image from post dated ${row.post_date || 'unknown'}.`);
+      } catch (err) {
+        console.error(err);
+        appendLog(`Failed to show cover: ${err.message}`, true);
+      }
+    }
+
+    function downloadTargetDatabase() {
+      if (!targetDbInstance) {
+        alert('No target database available. Please run a successful transfer first.');
+        return;
+      }
+      try {
+        const exportedData = targetDbInstance.jaferExport();
+        const blob = new Blob([exportedData], { type: 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'tikPosts.db';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        appendLog(`Downloaded target database as "tikPosts.db" (${exportedData.length} bytes).`);
+      } catch (err) {
+        appendLog(`Download failed: ${err.message}`, true);
+      }
+    }
+
+    transferBtn.addEventListener('click', transferPosts);
+    downloadBtn.addEventListener('click', downloadTargetDatabase);
+    showCoverBtn.addEventListener('click', showSampleCover);
+  })();
+</script>
+</body>
+</html>
