@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=auto, user-scalable=no">
+  <title>Update userApi Avatar · Abigail4410</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = { darkMode: 'class', theme: { extend: {} } }
+  </script>
+  <style>
+    .file-input-wrapper { position: relative; display: inline-block; cursor: pointer; }
+    .file-input-wrapper input { position: absolute; opacity: 0; width: 0; height: 0; }
+  </style>
+</head>
+<body class="bg-white dark:bg-black text-gray-800 dark:text-white font-sans min-h-screen flex items-center justify-center p-4">
+
+  <div class="max-w-md w-full space-y-4">
+    <!-- Card -->
+    <div class="bg-white dark:bg-gray-900 rounded-2xl shadow-xl p-6 border border-gray-200 dark:border-gray-700">
+      <div class="flex items-center gap-2 mb-4">
+        <i class="fa-brands fa-tiktok text-pink-500 text-2xl"></i>
+        <h1 class="text-lg font-semibold">Update Avatar (abigail4410)</h1>
+      </div>
+
+      <!-- Database upload -->
+      <div class="mb-4">
+        <label class="block text-xs font-medium mb-1">1. Select SQLite database</label>
+        <div class="file-input-wrapper w-full">
+          <input type="file" id="dbFileInput" accept=".db,.sqlite">
+          <button id="customDbBtn" class="w-full flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium rounded-xl transition duration-300 text-pink-600 dark:text-pink-200 border border-white/30 dark:border-white/10 backdrop-blur-lg bg-white/20 dark:bg-white/10 hover:bg-white/30 dark:hover:bg-white/20 shadow-lg shadow-pink-500/20">
+            <i class="fa-solid fa-database"></i> Choose database
+          </button>
+        </div>
+        <p id="dbName" class="text-xs text-gray-500 mt-1"></p>
+      </div>
+
+      <!-- Image upload -->
+      <div class="mb-4">
+        <label class="block text-xs font-medium mb-1">2. Select avatar image (JPEG/PNG)</label>
+        <div class="file-input-wrapper w-full">
+          <input type="file" id="imageFileInput" accept="image/jpeg,image/png">
+          <button id="customImageBtn" class="w-full flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium rounded-xl transition duration-300 text-pink-600 dark:text-pink-200 border border-white/30 dark:border-white/10 backdrop-blur-lg bg-white/20 dark:bg-white/10 hover:bg-white/30 dark:hover:bg-white/20 shadow-lg shadow-pink-500/20">
+            <i class="fa-solid fa-image"></i> Choose image
+          </button>
+        </div>
+        <p id="imageName" class="text-xs text-gray-500 mt-1"></p>
+        <div id="imagePreview" class="mt-2 hidden">
+          <img id="previewImg" class="w-20 h-20 rounded-full object-cover border border-gray-300">
+        </div>
+      </div>
+
+      <!-- Update button -->
+      <button id="updateBtn" disabled class="w-full flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium rounded-xl bg-pink-600 hover:bg-pink-700 text-white shadow-lg transition disabled:opacity-50 disabled:cursor-not-allowed">
+        <i class="fa-solid fa-upload"></i> Update & Prepare Download
+      </button>
+
+      <!-- Download button (appears after update) -->
+      <button id="downloadBtn" disabled class="w-full mt-3 flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium rounded-xl bg-green-600 hover:bg-green-700 text-white shadow-lg transition disabled:opacity-50 disabled:cursor-not-allowed">
+        <i class="fa-solid fa-download"></i> Download as tikPosts.db
+      </button>
+
+      <!-- Status -->
+      <div id="status" class="mt-4 text-xs text-center p-2 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300"></div>
+    </div>
+  </div>
+
+  <script src="js/jafersql.js"></script>
+  <script>
+    (function() {
+      // DOM elements
+      const dbFileInput = document.getElementById('dbFileInput');
+      const customDbBtn = document.getElementById('customDbBtn');
+      const dbNameSpan = document.getElementById('dbName');
+      const imageFileInput = document.getElementById('imageFileInput');
+      const customImageBtn = document.getElementById('customImageBtn');
+      const imageNameSpan = document.getElementById('imageName');
+      const imagePreviewDiv = document.getElementById('imagePreview');
+      const previewImg = document.getElementById('previewImg');
+      const updateBtn = document.getElementById('updateBtn');
+      const downloadBtn = document.getElementById('downloadBtn');
+      const statusDiv = document.getElementById('status');
+
+      let currentDb = null;          // JaferSQL database instance
+      let currentDbBuffer = null;    // raw ArrayBuffer of the loaded DB
+      let currentImageData = null;    // Uint8Array of the image blob
+      let isUpdated = false;          // whether we have applied the update
+
+      // Helper: show status
+      function setStatus(message, isError = false) {
+        statusDiv.textContent = message;
+        statusDiv.className = `mt-4 text-xs text-center p-2 rounded-lg ${isError ? 'bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-200' : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300'}`;
+      }
+
+      // Trigger file input clicks
+      customDbBtn.addEventListener('click', () => dbFileInput.click());
+      customImageBtn.addEventListener('click', () => imageFileInput.click());
+
+      // Handle database file selection
+      dbFileInput.addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        dbNameSpan.textContent = file.name;
+        setStatus('Loading database...');
+        try {
+          const buffer = await file.arrayBuffer();
+          currentDbBuffer = buffer;
+          currentDb = await JaferSQL.jaferInit(new Uint8Array(buffer));
+          // Check if userApi table exists
+          const tables = currentDb.jaferAll("SELECT name FROM sqlite_master WHERE type='table' AND name='userApi'");
+          if (tables.length === 0) {
+            setStatus('Warning: userApi table not found in this database.', true);
+          } else {
+            setStatus('Database loaded. Ready to update.');
+          }
+          updateBtn.disabled = false;
+          // Reset update flag
+          isUpdated = false;
+          downloadBtn.disabled = true;
+        } catch (err) {
+          console.error(err);
+          setStatus('Failed to load database: ' + err.message, true);
+          currentDb = null;
+          currentDbBuffer = null;
+          updateBtn.disabled = true;
+        }
+      });
+
+      // Handle image file selection
+      imageFileInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        imageNameSpan.textContent = file.name;
+        const reader = new FileReader();
+        reader.onload = async (ev) => {
+          const arrayBuffer = ev.target.result;
+          currentImageData = new Uint8Array(arrayBuffer);
+          // Show preview
+          const blob = new Blob([currentImageData], { type: file.type });
+          const url = URL.createObjectURL(blob);
+          previewImg.src = url;
+          imagePreviewDiv.classList.remove('hidden');
+          URL.revokeObjectURL(url);
+          setStatus('Image loaded. Click "Update & Prepare Download".');
+        };
+        reader.onerror = () => setStatus('Failed to read image', true);
+        reader.readAsArrayBuffer(file);
+      });
+
+      // Update the database with the new avatar
+      updateBtn.addEventListener('click', async () => {
+        if (!currentDb) {
+          setStatus('No database loaded.', true);
+          return;
+        }
+        if (!currentImageData) {
+          setStatus('No image selected.', true);
+          return;
+        }
+        setStatus('Updating avatar for abigail4410...');
+        try {
+          // Check if row exists for abigail4410
+          const existing = currentDb.jaferGet('SELECT * FROM userApi WHERE username = ?', ['abigail4410']);
+          const now = new Date().toISOString();
+          if (existing) {
+            // Update existing row – preserve all other fields, only change avatar and fetched_at
+            currentDb.jaferRun(`
+              UPDATE userApi 
+              SET avatar = ?, fetched_at = ? 
+              WHERE username = ?
+            `, [currentImageData, now, 'abigail4410']);
+          } else {
+            // Insert a new row with minimal info (other fields can be null)
+            currentDb.jaferRun(`
+              INSERT INTO userApi (username, avatar, fetched_at, status)
+              VALUES (?, ?, ?, ?)
+            `, ['abigail4410', currentImageData, now, 'manual_upload']);
+          }
+          setStatus('Avatar updated in memory. You can now download the database.');
+          isUpdated = true;
+          downloadBtn.disabled = false;
+        } catch (err) {
+          console.error(err);
+          setStatus('Update failed: ' + err.message, true);
+        }
+      });
+
+      // Download the modified database
+      downloadBtn.addEventListener('click', () => {
+        if (!currentDb || !isUpdated) {
+          setStatus('No updated database ready. Please update first.', true);
+          return;
+        }
+        try {
+          const exported = currentDb.jaferExport();
+          const blob = new Blob([exported], { type: 'application/octet-stream' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'tikPosts.db';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          setStatus('Database downloaded as tikPosts.db');
+        } catch (err) {
+          setStatus('Download failed: ' + err.message, true);
+        }
+      });
+
+      // Theme toggle (simple)
+      const themeToggle = document.createElement('button');
+      themeToggle.className = 'fixed top-4 right-4 text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-white';
+      themeToggle.innerHTML = '<i class="fa-solid fa-moon text-lg"></i>';
+      document.body.appendChild(themeToggle);
+      const html = document.documentElement;
+      const savedTheme = localStorage.getItem('theme') || 'dark';
+      if (savedTheme === 'light') html.classList.remove('dark');
+      else html.classList.add('dark');
+      themeToggle.addEventListener('click', () => {
+        if (html.classList.contains('dark')) {
+          html.classList.remove('dark');
+          localStorage.setItem('theme', 'light');
+          themeToggle.innerHTML = '<i class="fa-solid fa-sun text-lg"></i>';
+        } else {
+          html.classList.add('dark');
+          localStorage.setItem('theme', 'dark');
+          themeToggle.innerHTML = '<i class="fa-solid fa-moon text-lg"></i>';
+        }
+      });
+      if (savedTheme === 'light') themeToggle.innerHTML = '<i class="fa-solid fa-sun text-lg"></i>';
+    })();
+  </script>
+</body>
+</html>
