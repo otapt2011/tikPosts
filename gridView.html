@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full overflow-hidden dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=auto, user-scalable=no">
+  <title>Post Grid Viewer · TikTok style</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = { darkMode: 'class', theme: { extend: {} } }
+  </script>
+  <style>
+    .grd { aspect-ratio: 3/4; }
+    .grd img { max-width: 100%; max-height: 100%; aspect-ratio: 3/4; object-fit: cover; border: none; outline: none; background: transparent; display: block; }
+    .modal-overlay { background-color: rgba(0,0,0,0.5); }
+    .file-input-wrapper { position: relative; display: inline-block; cursor: pointer; }
+    .file-input-wrapper input { position: absolute; opacity: 0; width: 0; height: 0; }
+    /* custom dropdown */
+    .custom-dropdown { position: relative; display: inline-block; min-width: 220px; }
+    .dropdown-toggle { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+    .dropdown-menu { position: absolute; top: 100%; left: 0; right: 0; z-index: 30; max-height: 320px; overflow-y: auto; border-radius: 12px; margin-top: 4px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1); backdrop-filter: blur(8px); background: rgba(255,255,255,0.95); border: 1px solid rgba(255,255,255,0.3); display: none; }
+    .dark .dropdown-menu { background: rgba(30,30,40,0.95); border-color: rgba(255,255,255,0.1); }
+    .dropdown-menu.show { display: block; }
+    .dropdown-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; cursor: pointer; transition: all 0.2s; }
+    .dropdown-item:hover { background: rgba(236,72,153,0.2); }
+    .dropdown-item img { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; }
+    .owner-info { display: flex; flex-direction: column; line-height: 1.3; }
+    .owner-username { font-size: 11px; opacity: 0.7; }
+    /* Fullscreen overlay - hidden by default, flex added dynamically */
+    #fullScreen {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.9);
+      z-index: 1000;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+    }
+    #fullScreen.show {
+      display: flex;
+    }
+    #fullScreen img {
+      max-width: 90%;
+      max-height: 90%;
+      object-fit: contain;
+      border-radius: 12px;
+    }
+  </style>
+</head>
+<body class="flex flex-col bg-white dark:bg-black text-gray-800 dark:text-white font-sans text-sm h-full overflow-hidden">
+
+  <header class="w-full bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 shadow-lg flex items-center z-10 px-4 py-2">
+    <div id="logo" class="h-full w-auto overflow-hidden flex items-center">
+      <i class="fa-brands fa-tiktok text-pink-600 dark:text-pink-400 text-xl"></i>
+    </div>
+    <div class="flex-1 h-full overflow-hidden flex items-center px-2">
+      <span class="text-sm font-semibold text-gray-800 dark:text-white truncate">Post Grid Viewer</span>
+    </div>
+    <div class="flex items-center gap-3">
+      <button id="themeToggle" class="text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-white transition p-1">
+        <i class="fa-solid fa-moon text-lg"></i>
+      </button>
+    </div>
+  </header>
+
+  <main class="min-h-0 w-full flex-1 flex flex-col overflow-hidden py-2 px-2 gap-2">
+    <!-- Database source card (with id) -->
+    <div id="dbSourceCard" class="bg-white dark:bg-gray-900 rounded-lg shadow-md p-3 border border-gray-200 dark:border-gray-700 flex flex-wrap items-center gap-3">
+      <div class="flex items-center gap-2">
+        <i class="fa-solid fa-database text-pink-500"></i>
+        <span class="text-xs font-medium">Database:</span>
+      </div>
+      <div class="file-input-wrapper">
+        <input type="file" id="dbFileInput" accept=".db,.sqlite">
+        <button id="customUploadBtn" class="flex items-center gap-1 px-3 py-1 text-xs font-medium rounded-md transition duration-300 text-pink-600 dark:text-pink-200 border border-white/30 dark:border-white/10 backdrop-blur-lg bg-white/20 dark:bg-white/10 hover:bg-white/30 dark:hover:bg-white/20 active:bg-white/40 dark:active:bg-white/30 shadow-lg shadow-pink-500/20">
+          <i class="fa-solid fa-upload"></i> <span>Upload .db</span>
+        </button>
+      </div>
+      <span class="text-xs text-gray-400">or</span>
+      <input type="text" id="dbPathInput" placeholder="/path/to/database.db" class="flex-1 min-w-[200px] text-xs bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded px-2 py-1">
+      <button id="loadPathBtn" class="flex items-center gap-1 px-3 py-1 text-xs font-medium rounded-md transition duration-300 text-pink-600 dark:text-pink-200 border border-white/30 dark:border-white/10 backdrop-blur-lg bg-white/20 dark:bg-white/10 hover:bg-white/30 dark:hover:bg-white/20 active:bg-white/40 dark:active:bg-white/30 shadow-lg shadow-pink-500/20">
+        <i class="fa-solid fa-folder-open"></i> <span>Load from path</span>
+      </button>
+    </div>
+
+    <!-- Stats row (with id) -->
+    <div id="statsRow" class="flex justify-between gap-2 bg-white dark:bg-gray-900 rounded-lg shadow-md p-2 border border-gray-200 dark:border-gray-700">
+      <div class="flex items-center gap-4">
+        <div><span class="text-xs text-gray-500">Posts in DB:</span> <span id="totalPostsStat" class="font-bold">0</span></div>
+        <div><span class="text-xs text-gray-500">Showing:</span> <span id="showingPostsStat" class="font-bold">0</span></div>
+      </div>
+      <div class="text-xs text-gray-400" id="dbStatus">No database loaded</div>
+    </div>
+
+    <!-- Owner dropdown -->
+    <div id="dropdown" class="bg-white dark:bg-gray-900 rounded-lg shadow-md p-3 border border-gray-200 dark:border-gray-700 flex flex-wrap items-center gap-3">
+      <div class="flex items-center gap-2 ml-auto">
+        <span class="text-xs">User Name:</span>
+        <div class="custom-dropdown" id="ownerDropdown">
+          <div class="dropdown-toggle flex items-center gap-2 px-3 py-1 text-xs font-medium rounded-md transition duration-300 text-pink-600 dark:text-pink-200 border border-white/30 dark:border-white/10 backdrop-blur-lg bg-white/20 dark:bg-white/10 hover:bg-white/30 dark:hover:bg-white/20 shadow-lg shadow-pink-500/20">
+            <img id="selectedOwnerAvatar" src="" class="w-5 h-5 rounded-full object-cover hidden">
+            <span id="selectedOwnerName">-- select owner --</span>
+            <i class="fa-solid fa-chevron-down text-[10px]"></i>
+          </div>
+          <div class="dropdown-menu" id="dropdownMenu"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Grid container -->
+    <div id="gridContainer" class="flex-1 overflow-y-auto bg-white dark:bg-gray-900 rounded-lg shadow-md p-2 border border-gray-200 dark:border-gray-700 grid grid-cols-3 gap-2">
+      <div class="col-span-3 text-center text-gray-500 p-4">Load a database and select an owner</div>
+    </div>
+
+    <!-- Fullscreen overlay (hidden initially) -->
+    <div id="fullScreen">
+      <img id="full" src="" alt="full">
+    </div>
+  </main>
+
+  <footer class="w-full bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-700 shadow-lg flex items-center justify-between z-10 px-2 py-1">
+    <div class="flex w-full h-3 overflow-hidden"><span class="text-xs text-gray-500 dark:text-gray-400">Post grid · no API / no JSON extraction</span></div>
+  </footer>
+
+  <script src="js/jafersql.js"></script>
+  <script>
+    (function() {
+      // DOM elements
+      const dbSourceCard = document.getElementById('dbSourceCard');
+      const statsRow = document.getElementById('statsRow');
+      const dbFileInput = document.getElementById('dbFileInput');
+      const customUploadBtn = document.getElementById('customUploadBtn');
+      const dbPathInput = document.getElementById('dbPathInput');
+      const loadPathBtn = document.getElementById('loadPathBtn');
+      const totalPostsStat = document.getElementById('totalPostsStat');
+      const showingPostsStat = document.getElementById('showingPostsStat');
+      const dbStatusSpan = document.getElementById('dbStatus');
+      const gridContainer = document.getElementById('gridContainer');
+      const themeToggle = document.getElementById('themeToggle');
+      const ownerDropdown = document.getElementById('ownerDropdown');
+      const dropdownToggle = ownerDropdown.querySelector('.dropdown-toggle');
+      const dropdownMenu = document.getElementById('dropdownMenu');
+      const selectedOwnerAvatar = document.getElementById('selectedOwnerAvatar');
+      const selectedOwnerName = document.getElementById('selectedOwnerName');
+      const dropdownDiv = document.getElementById('dropdown');
+      const fullScreenDiv = document.getElementById('fullScreen');
+      const fullImg = document.getElementById('full');
+
+      let currentDb = null;
+      let currentOwners = [];
+      let currentPosts = [];
+      let currentBlobUrls = [];
+
+      function initTheme() {
+        const html = document.documentElement;
+        const icon = themeToggle.querySelector('i');
+        const saved = localStorage.getItem('theme') || 'dark';
+        if (saved === 'light') {
+          html.classList.remove('dark');
+          icon.classList.remove('fa-moon');
+          icon.classList.add('fa-sun');
+        } else {
+          html.classList.add('dark');
+          icon.classList.add('fa-moon');
+          icon.classList.remove('fa-sun');
+        }
+        themeToggle.addEventListener('click', () => {
+          if (html.classList.contains('dark')) {
+            html.classList.remove('dark');
+            icon.classList.remove('fa-moon');
+            icon.classList.add('fa-sun');
+            localStorage.setItem('theme', 'light');
+          } else {
+            html.classList.add('dark');
+            icon.classList.remove('fa-sun');
+            icon.classList.add('fa-moon');
+            localStorage.setItem('theme', 'dark');
+          }
+        });
+      }
+
+      function revokeBlobUrls() {
+        for (const url of currentBlobUrls) URL.revokeObjectURL(url);
+        currentBlobUrls = [];
+      }
+
+      function avatarBlobToUrl(blobData) {
+        if (!blobData || !blobData.length) return null;
+        const blob = new Blob([blobData], { type: 'image/jpeg' });
+        return URL.createObjectURL(blob);
+      }
+
+      function renderGrid() {
+        gridContainer.innerHTML = '';
+        if (!currentPosts.length) {
+          gridContainer.innerHTML = '<div class="col-span-3 text-center text-gray-500 p-4">No posts for this owner</div>';
+          showingPostsStat.textContent = '0';
+          return;
+        }
+        revokeBlobUrls();
+        showingPostsStat.textContent = currentPosts.length;
+
+        for (const post of currentPosts) {
+          let imgSrc = '';
+          if (post.cover_image_data && post.cover_image_data.length > 0) {
+            const blob = new Blob([post.cover_image_data], { type: 'image/jpeg' });
+            const url = URL.createObjectURL(blob);
+            currentBlobUrls.push(url);
+            imgSrc = url;
+          }
+          const likes = post.likes ? (post.likes >= 1000 ? (post.likes/1000).toFixed(1)+'K' : post.likes) : '0';
+          let dateHtml = '';
+          if (post.post_date) {
+            try {
+              const d = new Date(post.post_date);
+              if (!isNaN(d.getTime())) {
+                dateHtml = `<div class="absolute top-0 right-0 width-auto bg-black/50 text-white text-[8px] p-0 pl-1 pr-1 rounded-lg">${d.toLocaleDateString()}</div>`;
+              }
+            } catch(e) {}
+          }
+          const card = document.createElement('div');
+          card.className = 'flex items-center justify-center cursor-pointer';
+          card.innerHTML = `
+            <div class="grd bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-full z-10 p-1 border border-gray-200 dark:border-gray-700 relative">
+              <img src="${imgSrc}" alt="Cover" class="w-full h-full object-cover rounded" style="aspect-ratio:3/4;">
+              <div class="absolute bottom-0 left-0 width-auto bg-black/50 text-white text-[10px] p-0 pl-1 pr-1 truncate rounded-lg">❤️ ${likes}</div>
+              ${dateHtml}
+            </div>
+          `;
+          const imgElement = card.querySelector('img');
+          card.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const src = imgElement.src;
+            if (src) {
+              fullImg.src = src;
+              gridContainer.classList.add('hidden');
+              dropdownDiv.classList.add('hidden');
+              fullScreenDiv.classList.add('show');   // show fullscreen (flex via CSS)
+            }
+          });
+          gridContainer.appendChild(card);
+        }
+      }
+
+      // Close fullscreen when clicking on overlay
+      fullScreenDiv.addEventListener('click', () => {
+        fullScreenDiv.classList.remove('show');
+        gridContainer.classList.remove('hidden');
+        dropdownDiv.classList.remove('hidden');
+        fullImg.src = '';
+      });
+
+      function populateDropdown() {
+        dropdownMenu.innerHTML = '';
+        if (!currentOwners.length) {
+          const emptyItem = document.createElement('div');
+          emptyItem.className = 'dropdown-item text-gray-500';
+          emptyItem.textContent = 'No owners found';
+          dropdownMenu.appendChild(emptyItem);
+          return;
+        }
+        for (const owner of currentOwners) {
+          const item = document.createElement('div');
+          item.className = 'dropdown-item';
+          const avatarImg = document.createElement('img');
+          if (owner.avatarDataUrl) avatarImg.src = owner.avatarDataUrl;
+          else if (owner.avatarUrl) avatarImg.src = owner.avatarUrl;
+          else avatarImg.src = '';
+          avatarImg.onerror = () => { avatarImg.style.display = 'none'; };
+          avatarImg.style.width = '32px';
+          avatarImg.style.height = '32px';
+          avatarImg.style.borderRadius = '50%';
+          avatarImg.style.objectFit = 'cover';
+          const infoDiv = document.createElement('div');
+          infoDiv.className = 'owner-info';
+          const displaySpan = document.createElement('span');
+          displaySpan.textContent = owner.displayName || owner.username;
+          displaySpan.style.fontWeight = '500';
+          const userSpan = document.createElement('span');
+          userSpan.textContent = `@${owner.username}`;
+          userSpan.className = 'owner-username';
+          infoDiv.appendChild(displaySpan);
+          infoDiv.appendChild(userSpan);
+          item.appendChild(avatarImg);
+          item.appendChild(infoDiv);
+          item.addEventListener('click', () => {
+            selectOwner(owner);
+            dropdownMenu.classList.remove('show');
+          });
+          dropdownMenu.appendChild(item);
+        }
+      }
+
+      function selectOwner(owner) {
+        if (!owner) {
+          selectedOwnerName.textContent = '-- select owner --';
+          selectedOwnerAvatar.src = '';
+          selectedOwnerAvatar.classList.add('hidden');
+          currentPosts = [];
+          renderGrid();
+          return;
+        }
+        const displayText = owner.displayName ? `${owner.displayName} (@${owner.username})` : `@${owner.username}`;
+        selectedOwnerName.textContent = displayText;
+        if (owner.avatarDataUrl) {
+          selectedOwnerAvatar.src = owner.avatarDataUrl;
+          selectedOwnerAvatar.classList.remove('hidden');
+        } else if (owner.avatarUrl) {
+          selectedOwnerAvatar.src = owner.avatarUrl;
+          selectedOwnerAvatar.classList.remove('hidden');
+        } else {
+          selectedOwnerAvatar.classList.add('hidden');
+        }
+        loadPostsForOwner(owner.username);
+      }
+
+      async function loadPostsForOwner(owner) {
+        if (!currentDb || !owner) {
+          currentPosts = [];
+          renderGrid();
+          return;
+        }
+        try {
+          const rows = currentDb.jaferAll(`
+            SELECT post_date, likes, cover_image_data
+            FROM user_posts
+            WHERE owner_username = ?
+            ORDER BY likes DESC
+          `, [owner]);
+          currentPosts = rows;
+          renderGrid();
+        } catch (err) {
+          console.error(err);
+          currentPosts = [];
+          renderGrid();
+          dbStatusSpan.textContent = 'Error loading posts';
+        }
+      }
+
+      async function loadOwnersAndAvatars() {
+        if (!currentDb) return;
+        try {
+          const rows = currentDb.jaferAll(`
+            SELECT DISTINCT 
+              up.owner_username,
+              ua.displayName AS apiDisplayName,
+              uj.displayName AS jsonDisplayName,
+              ua.avatar,
+              ua.avatarUrl
+            FROM user_posts up
+            LEFT JOIN userApi ua ON up.owner_username = ua.username
+            LEFT JOIN userJson uj ON up.owner_username = uj.userName
+            ORDER BY up.owner_username
+          `);
+          currentOwners = rows.map(row => {
+            let displayName = row.apiDisplayName || row.jsonDisplayName || null;
+            let avatarDataUrl = null;
+            if (row.avatar && row.avatar.length) avatarDataUrl = avatarBlobToUrl(row.avatar);
+            return {
+              username: row.owner_username,
+              displayName: displayName,
+              avatarDataUrl: avatarDataUrl,
+              avatarUrl: row.avatarUrl || null
+            };
+          });
+          populateDropdown();
+          selectOwner(null);
+          const totalRows = currentDb.jaferAll('SELECT COUNT(*) as cnt FROM user_posts');
+          totalPostsStat.textContent = totalRows[0]?.cnt || 0;
+          dbStatusSpan.textContent = `Loaded · ${totalRows[0]?.cnt || 0} total posts`;
+        } catch (err) {
+          console.error(err);
+          dbStatusSpan.textContent = 'Error reading owners';
+        }
+      }
+
+      async function loadDatabaseFromBuffer(buffer, sourceName) {
+        try {
+          if (currentDb) {
+            try { currentDb.jaferClose(); } catch(e) {}
+            currentDb = null;
+          }
+          revokeBlobUrls();
+          for (const owner of currentOwners) {
+            if (owner.avatarDataUrl) URL.revokeObjectURL(owner.avatarDataUrl);
+          }
+          currentDb = await JaferSQL.jaferInit(new Uint8Array(buffer));
+          dbStatusSpan.textContent = `Loaded: ${sourceName}`;
+          await loadOwnersAndAvatars();
+
+          // Hide database card and stats row (as requested)
+          dbSourceCard.classList.add('hidden');
+          statsRow.classList.add('hidden');
+        } catch (err) {
+          console.error(err);
+          dbStatusSpan.textContent = `Error: ${err.message}`;
+          alert('Failed to open database: ' + err.message);
+        }
+      }
+
+      async function loadFromFile(file) {
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = async (e) => await loadDatabaseFromBuffer(e.target.result, file.name);
+        reader.onerror = () => alert('Failed to read file');
+        reader.readAsArrayBuffer(file);
+      }
+
+      async function loadFromPath(path) {
+        if (!path.trim()) return;
+        try {
+          const response = await fetch(path);
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const buffer = await response.arrayBuffer();
+          await loadDatabaseFromBuffer(buffer, path);
+        } catch (err) {
+          dbStatusSpan.textContent = `Cannot load from path: ${err.message}`;
+          alert(`Failed to load database from ${path}\n${err.message}`);
+        }
+      }
+
+      function toggleDropdown(e) {
+        e.stopPropagation();
+        const isOpen = dropdownMenu.classList.contains('show');
+        document.querySelectorAll('.dropdown-menu.show').forEach(menu => {
+          if (menu !== dropdownMenu) menu.classList.remove('show');
+        });
+        if (isOpen) dropdownMenu.classList.remove('show');
+        else dropdownMenu.classList.add('show');
+      }
+
+      function closeDropdown(e) {
+        if (!ownerDropdown.contains(e.target)) dropdownMenu.classList.remove('show');
+      }
+
+      customUploadBtn.addEventListener('click', () => dbFileInput.click());
+      dbFileInput.addEventListener('change', (e) => { if (e.target.files.length) loadFromFile(e.target.files[0]); });
+      loadPathBtn.addEventListener('click', () => { const path = dbPathInput.value.trim(); if (path) loadFromPath(path); else alert('Please enter a database path.'); });
+      dropdownToggle.addEventListener('click', toggleDropdown);
+      document.addEventListener('click', closeDropdown);
+
+      initTheme();
+    })();
+  </script>
+</body>
+</html>
